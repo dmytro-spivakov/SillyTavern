@@ -180,6 +180,54 @@ router.post('/generate', async function (req, res) {
         controller.abort();
     });
 
+    const isXiaolong = !!req.body.xiaolong_api;
+
+    // Xiaolong uses the OpenAI-compatible /oa/v1/completions endpoint
+    if (isXiaolong) {
+        const { xiaolong_api, streaming, ...oaPayload } = req.body;
+        console.debug('Xiaolong OA payload:', util.inspect(oaPayload, { depth: 4 }));
+
+        const args = {
+            body: JSON.stringify(oaPayload),
+            headers: { 'Content-Type': 'application/json', 'Authorization': 'Bearer ' + api_key_novel },
+            signal: controller.signal,
+        };
+
+        try {
+            const url = `${TEXT_NOVELAI}/oa/v1/completions`;
+            const response = await fetch(url, { method: 'POST', ...args });
+
+            if (req.body.stream) {
+                // Pipe the OpenAI-format SSE stream directly to the client
+                forwardFetchResponse(response, res);
+            } else {
+                if (!response.ok) {
+                    const text = await response.text();
+                    let message = text;
+                    console.warn(`Novel API (Xiaolong) returned error: ${response.status} ${response.statusText} ${text}`);
+                    try {
+                        const data = JSON.parse(text);
+                        message = data.message || data.error?.message || text;
+                    } catch {
+                        // ignore
+                    }
+                    return res.status(500).send({ error: { message } });
+                }
+
+                /** @type {any} */
+                const data = await response.json();
+                const outputText = data?.choices?.[0]?.text ?? '';
+                console.info('NovelAI Xiaolong Output', outputText);
+                // Convert OpenAI response format to the format the frontend expects
+                return res.send({ output: outputText });
+            }
+        } catch (error) {
+            console.error('Xiaolong generation error:', error);
+            return res.send({ error: true });
+        }
+        return;
+    }
+
     // Add customized bad words for Clio, Kayra, and Erato
     const badWordsList = getBadWordsList(req.body.model);
 

@@ -516,6 +516,7 @@ export function getNovelGenerationData(finalPrompt, settings, maxLength, isImper
     console.debug('NovelAI generation data for', type);
     const isKayra = nai_settings.model_novel.includes('kayra');
     const isErato = nai_settings.model_novel.includes('erato');
+    const isXiaolong = nai_settings.model_novel.includes('xialong');
 
     const tokenizerType = getTokenizerTypeForModel(nai_settings.model_novel);
     const stoppingStrings = getStoppingStrings(isImpersonate, isContinue);
@@ -568,6 +569,41 @@ export function getNovelGenerationData(finalPrompt, settings, maxLength, isImper
         finalPrompt = '<|startoftext|><|reserved_special_token81|>' + finalPrompt;
     }
 
+    // Xiaolong uses the OpenAI-compatible /oa/v1/completions endpoint
+    if (isXiaolong) {
+        const adjustedMaxLength = getNovelMaxResponseTokens();
+        // Default logit bias to suppress special tokens from generation
+        const xiaolongLogitBias = { '151331': -100, '151350': -100, '151351': -100, '151360': -100 };
+        // Merge user-defined logit biases (convert from NAI format to OpenAI format)
+        if (Array.isArray(logitBias)) {
+            for (const entry of logitBias) {
+                if (entry.sequence && entry.sequence.length === 1) {
+                    xiaolongLogitBias[String(entry.sequence[0])] = entry.bias;
+                }
+            }
+        }
+        return {
+            'xiaolong_api': true,
+            'model': nai_settings.model_novel,
+            'prompt': finalPrompt,
+            'max_tokens': maxLength < adjustedMaxLength ? maxLength : adjustedMaxLength,
+            'temperature': Number(nai_settings.temperature),
+            'top_p': Number(nai_settings.top_p),
+            'top_k': Number(nai_settings.top_k),
+            'min_p': Number(nai_settings.min_p),
+            'frequency_penalty': Number(nai_settings.repetition_penalty_frequency),
+            'presence_penalty': Number(nai_settings.repetition_penalty_presence),
+            'unified_linear': Number(nai_settings.math1_temp),
+            'unified_quadratic': Number(nai_settings.math1_quad),
+            'unified_increase_linear_with_entropy': Number(nai_settings.math1_quad_entropy_scale),
+            'unified_cubic': 0,
+            'stop': stoppingStrings.slice(0, 16),
+            'logit_bias': xiaolongLogitBias,
+            'logprobs': power_user.request_token_probabilities ? 10 : undefined,
+            'stream': nai_settings.streaming_novel,
+        };
+    }
+
     const adjustedMaxLength = (isKayra || isErato) ? getNovelMaxResponseTokens() : maximum_output_length;
 
     return {
@@ -612,7 +648,8 @@ function selectPrefix(selected_prefix, finalPrompt) {
     const clio = nai_settings.model_novel.includes('clio');
     const kayra = nai_settings.model_novel.includes('kayra');
     const erato = nai_settings.model_novel.includes('erato');
-    const isNewModel = clio || kayra || erato;
+    const xiaolong = nai_settings.model_novel.includes('xialong');
+    const isNewModel = clio || kayra || erato || xiaolong;
 
     if (isNewModel) {
         // NovelAI claims they scan backwards 1000 characters (not tokens!) to look for instruct brackets. That's really short.
@@ -632,6 +669,9 @@ function getTokenizerTypeForModel(model) {
         return tokenizers.NERD2;
     }
     if (model.includes('erato')) {
+        return tokenizers.LLAMA3;
+    }
+    if (model.includes('xialong')) {
         return tokenizers.LLAMA3;
     }
     return tokenizers.NONE;
@@ -739,7 +779,11 @@ function tryParseStreamingError(response, decoded) {
 }
 
 export async function generateNovelWithStreaming(generate_data, signal) {
-    generate_data.streaming = nai_settings.streaming_novel;
+    const isXiaolong = generate_data.xiaolong_api;
+
+    if (!isXiaolong) {
+        generate_data.streaming = nai_settings.streaming_novel;
+    }
 
     const response = await fetch('/api/novelai/generate', {
         headers: getRequestHeaders(),
@@ -761,13 +805,20 @@ export async function generateNovelWithStreaming(generate_data, signal) {
             const { done, value } = await reader.read();
             if (done) return;
 
+            // OpenAI-compatible API sends [DONE] as last message
+            if (value.data === '[DONE]') return;
+
             const data = JSON.parse(value.data);
 
-            if (data.token) {
+            // OpenAI-compatible format (xiaolong): data.choices[0].text
+            // Legacy NAI format: data.token
+            if (isXiaolong && data.choices?.[0]?.text) {
+                text += data.choices[0].text;
+            } else if (data.token) {
                 text += data.token;
             }
 
-            yield { text, swipes: [], logprobs: parseNovelAILogprobs(data.logprobs), toolCalls: [], state: {} };
+            yield { text, swipes: [], logprobs: isXiaolong ? null : parseNovelAILogprobs(data.logprobs), toolCalls: [], state: {} };
         }
     };
 }

@@ -5862,6 +5862,9 @@ export function getMaxContextTokens() {
             // Added special tokens and whatnot
             this_max_context -= 10;
         }
+        if (nai_settings.model_novel.includes('xialong')) {
+            this_max_context = Math.min(max_context, 8192);
+        }
         return this_max_context;
     }
     if (main_api == 'openai') {
