@@ -569,9 +569,9 @@ export function getNovelGenerationData(finalPrompt, settings, maxLength, isImper
         finalPrompt = '<|startoftext|><|reserved_special_token81|>' + finalPrompt;
     }
 
-    // Xiaolong uses the OpenAI-compatible /oa/v1/completions endpoint
+    // Xiaolong uses the OpenAI-compatible /oa/v1/completions endpoint,
+    // which does not enforce NAI's tier-based response caps — honor the UI slider directly.
     if (isXiaolong) {
-        const adjustedMaxLength = getNovelMaxResponseTokens();
         // Default logit bias to suppress special tokens from generation
         const xiaolongLogitBias = { '151331': -100, '151350': -100, '151351': -100, '151360': -100 };
         // Merge user-defined logit biases (convert from NAI format to OpenAI format)
@@ -586,7 +586,7 @@ export function getNovelGenerationData(finalPrompt, settings, maxLength, isImper
             'xiaolong_api': true,
             'model': nai_settings.model_novel,
             'prompt': finalPrompt,
-            'max_tokens': maxLength < adjustedMaxLength ? maxLength : adjustedMaxLength,
+            'max_tokens': maxLength,
             'temperature': Number(nai_settings.temperature),
             'top_p': Number(nai_settings.top_p),
             'top_k': Number(nai_settings.top_k),
